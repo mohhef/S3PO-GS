@@ -225,7 +225,8 @@ if __name__ == "__main__":
     parser.add_argument("--iter", type=int, default=None, help="iteration count of pose optimization")
     parser.add_argument("--windowsize", type=int, default=None, help="window size of local BA")
     parser.add_argument("--patch_size", type=int, default=None, help="patch size")
-    
+    parser.add_argument("--ns", type=int, default=None, help="mapping iteration no single")
+    parser.add_argument("--sh", type=int, default=None, help="spherical harmonics degree")
 
     args = parser.parse_args(sys.argv[1:])
 

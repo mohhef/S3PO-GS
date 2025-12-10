@@ -69,29 +69,43 @@ class KITTIParser:
     def __init__(self, input_folder, config):
         self.input_folder = input_folder
         self.begin = config["Dataset"]["begin"]
-        self.end = config["Dataset"]["end"] 
+        self.end = config["Dataset"]["end"]
         self.color_paths = sorted(glob.glob(f"{self.input_folder}/rgb/*.png"))[self.begin:self.end]
         self.depth_paths = sorted(glob.glob(f"{self.input_folder}/rgb/*.png"))[self.begin:self.end]
         self.mono_depth_paths = sorted(glob.glob(f"{self.input_folder}/rgb/*.png"))[self.begin:self.end]
         self.n_img = len(self.color_paths)
-        self.load_poses(f"{self.input_folder}/gt/*.txt")
+        self.load_poses(f"{self.input_folder}/poses.txt")
 
     def load_poses(self, path):
+        """Load poses from standard KITTI format (single file, 12 values per line)."""
         self.poses = []
         self.frames = []
-        pose_files = sorted(glob.glob(path))[self.begin:self.end]
-        init_trans = np.loadtxt(pose_files[0], delimiter=' ').reshape(4, 4)[:3,3]
+
+        with open(path, 'r') as f:
+            lines = f.readlines()
+
+        # Apply begin/end slicing
+        lines = lines[self.begin:self.end]
+
+        # Get initial translation for normalization
+        init_values = list(map(float, lines[0].split()))
+        init_pose_3x4 = np.array(init_values).reshape(3, 4)
+        init_trans = init_pose_3x4[:, 3]
 
         for i in range(self.n_img):
-            pose = np.loadtxt(pose_files[i], delimiter=' ').reshape(4, 4)
-            pose[:3,3] = pose[:3,3] - init_trans
-            inv_pose = np.linalg.inv(pose)  
-            self.poses.append(inv_pose)     
+            # Parse 12 values into 3x4 matrix
+            values = list(map(float, lines[i].split()))
+            pose_3x4 = np.array(values).reshape(3, 4)
+            # Convert to 4x4 by adding [0, 0, 0, 1] row
+            pose = np.vstack([pose_3x4, [0, 0, 0, 1]])
+            pose[:3, 3] = pose[:3, 3] - init_trans
+            inv_pose = np.linalg.inv(pose)
+            self.poses.append(inv_pose)
             frame = {
                 "file_path": self.color_paths[i],
                 "depth_path": self.color_paths[i],
                 "mono_depth_path": self.color_paths[i],
-                "transform_matrix": pose.tolist(),      
+                "transform_matrix": pose.tolist(),
             }
             self.frames.append(frame)
 

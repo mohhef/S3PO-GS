@@ -1,9 +1,15 @@
 __pycache__/
 *.py[cod]
+*.pyc
 
 .ipynb_checkpoints/
 
 preprocess/
+datasets/
+results/
+build/
+*.so
+*.egg-info/
 
 *.log
 *.tmp
