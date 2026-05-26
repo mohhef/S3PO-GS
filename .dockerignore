@@ -1,0 +1,53 @@
+# Exclude large host artifacts from the podman build context. Each entry
+# below significantly slows the COPY step or balloons the resulting image
+# with state the container shouldn't carry. See deps/slam-algorithms/
+# S3PO-GS/Dockerfile for the runtime bind-mount conventions.
+
+# MASt3R foundation-model checkpoint (~2.5 GB if install_all.sh has
+# run). Bind-mounted from ~/.cache/huggingface at runtime by the
+# wrapper (mast3r.model.from_pretrained falls back to
+# huggingface_hub.from_pretrained which caches there).
+checkpoints/
+
+# Host-side conda-runner output (per-keyframe Gaussians + plot/json
+# trajectories). Tens to hundreds of MB; the container's output dir
+# is bind-mounted to the host output_dir at run time, never to
+# /s3pogs.
+results/
+
+# Host-side staged datasets (symlinks to perturbed sequence dirs)
+# from the conda runner. The container's dataset path is bind-mounted
+# at runtime instead.
+datasets/
+
+# Editor / Python / build noise.
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.git/
+.gitignore
+.dockerignore
+.idea/
+.vscode/
+*.swp
+*.ipynb_checkpoints
+.ipynb_checkpoints/
+
+# Built CUDA extensions / CMake intermediates from the host. The
+# Dockerfile's strip step removes these from the in-container source
+# too, but excluding them here avoids COPYing megabytes of stale
+# binaries that won't be used.
+build/
+dist/
+*.so
+submodules/simple-knn/build/
+submodules/simple-knn/*.egg-info/
+submodules/simple-knn/*.so
+submodules/diff-gaussian-rasterization/build/
+submodules/diff-gaussian-rasterization/*.egg-info/
+submodules/diff-gaussian-rasterization/*.so
+croco/models/curope/build/
+croco/models/curope/*.so
+dust3r/croco/models/curope/build/
+dust3r/croco/models/curope/*.so
