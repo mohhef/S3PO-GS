@@ -17,6 +17,40 @@ from utils.slam_utils import get_loss_tracking, get_median_depth
 from utils.init_pose import get_pose, get_depth
 from utils.depth_utils import process_depth
 
+import sys
+
+# --- SAL real-time deadline harness -----------------------------------------
+# When SAL_DEADLINE_FPS is set, the frontend's frame index is driven by a
+# DeadlineIterator (paced to target_fps, dropping late frames). S3PO-GS keys
+# keyframes by the real frame index (kf_indices), so dropped frames just give
+# sparser keyframes -- no remap. No-op when the var is unset. Runs in the
+# spawned frontend process, which inherits the SAL_DEADLINE_* env.
+
+
+def _load_deadline_iterator():
+    runtime_path = os.environ.get("SAL_RUNTIME_PATH")
+    if runtime_path and runtime_path not in sys.path:
+        sys.path.insert(0, runtime_path)
+    from deadline_iterator import DeadlineIterator  # noqa: E402
+    return DeadlineIterator
+
+
+def _build_deadline_frame_source(n):
+    """Iterator over frame indices; paced DeadlineIterator when the harness is on."""
+    fps = os.environ.get("SAL_DEADLINE_FPS")
+    if not fps:
+        return iter(range(n))
+    DeadlineIterator = _load_deadline_iterator()
+    return iter(
+        DeadlineIterator(
+            list(range(n)),
+            float(fps),
+            warmup_frames=int(os.environ.get("SAL_DEADLINE_WARMUP_FRAMES", 0) or 0),
+            queue_size=int(os.environ.get("SAL_DEADLINE_QUEUE_SIZE", 1) or 1),
+            drop_policy=os.environ.get("SAL_DEADLINE_DROP_POLICY", "drop_oldest") or "drop_oldest",
+        )
+    )
+
 class FrontEnd(mp.Process):
     def __init__(self, config,model, save_dir=None):
         super().__init__()
@@ -151,8 +185,17 @@ class FrontEnd(mp.Process):
    
     def tracking(self, cur_frame_idx, viewpoint):    
         ##=====================Pointmap Anchored Pose Estimation(PAPE)=====================
-        # The previous frame
-        prev = self.cameras[cur_frame_idx - self.use_every_n_frames]
+        # The previous frame. Under the SAL deadline harness, frames can be
+        # dropped, so the fixed -use_every_n_frames offset may land on a
+        # dropped index that was never stored in self.cameras. Fall back to
+        # the most recent stored frame before this one. With the harness off
+        # (contiguous indices) cur_frame_idx - use_every_n_frames is always
+        # present, so this is a no-op there.
+        prev_idx = cur_frame_idx - self.use_every_n_frames
+        if prev_idx not in self.cameras:
+            earlier = [k for k in self.cameras if k < cur_frame_idx]
+            prev_idx = max(earlier) if earlier else cur_frame_idx
+        prev = self.cameras[prev_idx]
         pose_prev = getWorld2View2(prev.R, prev.T)
         
         # adjacent keyframe
@@ -373,7 +416,15 @@ class FrontEnd(mp.Process):
     # Main execution loop: process messages in frontend and backend queues, perform tracking, keyframe management, 
     # synchronize data, clean up resources, and save results
     def run(self):
-        cur_frame_idx = 0
+        frame_source = _build_deadline_frame_source(len(self.dataset))
+
+        def _next_frame_index():
+            try:
+                return next(frame_source)
+            except StopIteration:
+                return None
+
+        cur_frame_idx = _next_frame_index()
         projection_matrix = getProjectionMatrix2(    
             znear=0.01,
             zfar=100.0,
@@ -403,7 +454,7 @@ class FrontEnd(mp.Process):
 
             if self.frontend_queue.empty():    
                 tic.record()
-                if cur_frame_idx >= len(self.dataset):  # If current frame index exceeds dataset length, evaluate results, save, and exit the loop
+                if cur_frame_idx is None:  # frame source exhausted: evaluate results, save, and exit the loop
                     if self.save_results:
                         eval_ate(
                             self.cameras,
@@ -440,7 +491,7 @@ class FrontEnd(mp.Process):
                 if self.reset:
                     self.initialize(cur_frame_idx, viewpoint)
                     self.current_window.append(cur_frame_idx)
-                    cur_frame_idx += 1
+                    cur_frame_idx = _next_frame_index()
                     continue
 
                 self.initialized = self.initialized or (
@@ -464,7 +515,7 @@ class FrontEnd(mp.Process):
                 
                 if self.requested_keyframe > 0:
                     self.cleanup(cur_frame_idx)
-                    cur_frame_idx += 1
+                    cur_frame_idx = _next_frame_index()
                     continue
 
                 last_keyframe_idx = self.current_window[0]
@@ -508,7 +559,7 @@ class FrontEnd(mp.Process):
                     )
                 else:
                     self.cleanup(cur_frame_idx)
-                cur_frame_idx += 1          
+                cur_frame_idx = _next_frame_index()          
 
                 if (        # Evaluate camera pose if the conditions are satisfied
                     self.save_results
